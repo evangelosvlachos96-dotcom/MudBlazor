@@ -26,7 +26,14 @@ internal partial class DefaultConverter
 
             var currentCulture = culture.Invoke();
 
-            if (TNumber.TryParse(input, NumberStyles.Any, currentCulture, out var result))
+            if (IsPercentFormat(format.Invoke()))
+            {
+                if (TryParsePercent<TNumber>(input, currentCulture, out var percent))
+                {
+                    return percent;
+                }
+            }
+            else if (TNumber.TryParse(input, NumberStyles.Any, currentCulture, out var result))
             {
                 return result;
             }

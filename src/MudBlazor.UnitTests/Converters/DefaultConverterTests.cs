@@ -315,6 +315,18 @@ public class DefaultConverterTests
         parsed.Should().Be(date);
     }
 
+    /// <summary>
+    /// The default converter dispatches percent-formatted text to the percent-aware number parsing (#11241).
+    /// </summary>
+    [Test]
+    public void DefaultConverter_PercentFormat_RoundTrips()
+    {
+        var conv = new DefaultConverter<double?> { Format = () => "P2", Culture = () => CultureInfo.GetCultureInfo("tr-TR") };
+
+        conv.Convert(0.5678).Should().Be("%56,78");
+        conv.ConvertBack("%56,78").Should().Be(0.5678);
+    }
+
     #endregion
 
     #region Enum
@@ -1023,6 +1035,30 @@ public class DefaultConverterTests
             .Be(LanguageResource.Converter_InvalidNumber);
     }
 
+    /// <summary>
+    /// Nullable percent-formatted values round-trip, empty text stays null, and invalid text still produces the invalid number error (#11241).
+    /// </summary>
+    [Test]
+    public void NullableNumber_PercentFormat_RoundTrips()
+    {
+        var culture = CultureInfo.GetCultureInfo("el-GR");
+        var conv = CreateNullableNumberConverter<double>(() => culture, () => "P2");
+
+        conv.ConvertBack(conv.Convert(0.1234)).Should().Be(0.1234);
+        conv.ConvertBack(conv.Convert(-0.1234)).Should().Be(-0.1234);
+        conv.Convert(null).Should().BeNull();
+        conv.ConvertBack(null).Should().BeNull();
+        conv.ConvertBack(string.Empty).Should().BeNull();
+
+        Action act = () => conv.ConvertBack("abc");
+
+        act.Should()
+            .Throw<ConversionException>()
+            .Which.ErrorMessageKey
+            .Should()
+            .Be(LanguageResource.Converter_InvalidNumber);
+    }
+
     #endregion
 
     #region Number
@@ -1081,6 +1117,169 @@ public class DefaultConverterTests
         var conv = CreateNumberConverter<int>();
 
         Action act = () => conv.ConvertBack("not-a-number");
+
+        act.Should()
+            .Throw<ConversionException>()
+            .Which.ErrorMessageKey
+            .Should()
+            .Be(LanguageResource.Converter_InvalidNumber);
+    }
+
+    /// <summary>
+    /// Only the standard percent specifier, with or without a precision, is treated as a percent format (#11241).
+    /// </summary>
+    [TestCase("P", true)]
+    [TestCase("p", true)]
+    [TestCase("P2", true)]
+    [TestCase("P10", true)]
+    [TestCase(null, false)]
+    [TestCase("", false)]
+    [TestCase("N2", false)]
+    [TestCase("C", false)]
+    [TestCase("F2", false)]
+    [TestCase("Pct", false)]
+    [TestCase("0%", false)]
+    public void IsPercentFormat_RecognizesStandardPercentSpecifier(string? format, bool expected)
+    {
+        DefaultConverter.IsPercentFormat(format).Should().Be(expected);
+    }
+
+    /// <summary>
+    /// Percent-formatted text converts back to the original value in cultures with different percent conventions (#11241).
+    /// </summary>
+    [TestCase("", 0.1234)]
+    [TestCase("", -0.1234)]
+    [TestCase("tr-TR", 0.1234)]
+    [TestCase("tr-TR", -0.1234)]
+    [TestCase("el-GR", 0.1234)]
+    [TestCase("el-GR", -0.1234)]
+    public void Number_PercentFormat_RoundTrips(string cultureName, double value)
+    {
+        var culture = CultureInfo.GetCultureInfo(cultureName);
+        var decimalValue = (decimal)value;
+        var decimalConverter = CreateNumberConverter<decimal>(() => culture, () => "P2");
+        var doubleConverter = CreateNumberConverter<double>(() => culture, () => "P2");
+
+        decimalConverter.ConvertBack(decimalConverter.Convert(decimalValue)).Should().Be(decimalValue);
+        doubleConverter.ConvertBack(doubleConverter.Convert(value)).Should().Be(value);
+    }
+
+    /// <summary>
+    /// A culture that places the percent symbol before the number, such as tr-TR, formats and parses percent text (#11241).
+    /// </summary>
+    [Test]
+    public void Number_PercentFormat_SymbolLeads()
+    {
+        var culture = CultureInfo.GetCultureInfo("tr-TR");
+        var conv = CreateNumberConverter<decimal>(() => culture, () => "P2");
+
+        conv.Convert(0.125m).Should().Be("%12,50");
+        conv.Convert(-0.125m).Should().Be("-%12,50");
+        conv.ConvertBack("%12,5").Should().Be(0.125m);
+        conv.ConvertBack("-%12,5").Should().Be(-0.125m);
+    }
+
+    /// <summary>
+    /// A culture with a comma decimal separator, such as el-GR, formats and parses percent text (#11241).
+    /// </summary>
+    [Test]
+    public void Number_PercentFormat_CommaDecimalSeparator()
+    {
+        var culture = CultureInfo.GetCultureInfo("el-GR");
+        var conv = CreateNumberConverter<decimal>(() => culture, () => "P2");
+
+        conv.Convert(0.125m).Should().Be("12,50%");
+        conv.Convert(-0.125m).Should().Be("-12,50%");
+        conv.ConvertBack("12,5%").Should().Be(0.125m);
+        conv.ConvertBack("-12,5%").Should().Be(-0.125m);
+        conv.ConvertBack("1.234,5%").Should().Be(12.345m);
+    }
+
+    /// <summary>
+    /// Negative percent text round-trips for every <see cref="NumberFormatInfo.PercentNegativePattern"/> (#11241).
+    /// </summary>
+    [Test]
+    public void Number_PercentFormat_EveryNegativePattern_RoundTrips([Range(0, 11)] int pattern)
+    {
+        var culture = (CultureInfo)CultureInfo.InvariantCulture.Clone();
+        culture.NumberFormat.PercentNegativePattern = pattern;
+        var conv = CreateNumberConverter<decimal>(() => culture, () => "P2");
+
+        conv.ConvertBack(conv.Convert(-0.1234m)).Should().Be(-0.1234m);
+    }
+
+    /// <summary>
+    /// Positive percent text round-trips for every <see cref="NumberFormatInfo.PercentPositivePattern"/> (#11241).
+    /// </summary>
+    [Test]
+    public void Number_PercentFormat_EveryPositivePattern_RoundTrips([Range(0, 3)] int pattern)
+    {
+        var culture = (CultureInfo)CultureInfo.InvariantCulture.Clone();
+        culture.NumberFormat.PercentPositivePattern = pattern;
+        var conv = CreateNumberConverter<decimal>(() => culture, () => "P2");
+
+        conv.ConvertBack(conv.Convert(0.1234m)).Should().Be(0.1234m);
+    }
+
+    /// <summary>
+    /// Percent separators that differ from the number separators are honored when parsing (#11241).
+    /// </summary>
+    [Test]
+    public void Number_ConvertBack_PercentFormat_CustomPercentSeparators()
+    {
+        var culture = (CultureInfo)CultureInfo.InvariantCulture.Clone();
+        culture.NumberFormat.PercentDecimalSeparator = ",";
+        culture.NumberFormat.PercentGroupSeparator = ".";
+        var conv = CreateNumberConverter<decimal>(() => culture, () => "P2");
+
+        conv.Convert(12.3456m).Should().Be("1.234,56 %");
+        conv.ConvertBack("1.234,56 %").Should().Be(12.3456m);
+    }
+
+    /// <summary>
+    /// Text without the percent symbol is read as a percentage, because the numeric field's key filter blocks typing the symbol (#11241).
+    /// </summary>
+    [Test]
+    public void Number_ConvertBack_PercentFormat_WithoutSymbol_ReadsInputAsPercent()
+    {
+        var conv = CreateNumberConverter<decimal>(() => CultureInfo.InvariantCulture, () => "P2");
+
+        conv.ConvertBack("15").Should().Be(0.15m);
+        conv.ConvertBack("-15").Should().Be(-0.15m);
+    }
+
+    /// <summary>
+    /// Invalid percent text still produces the invalid number conversion error (#11241).
+    /// </summary>
+    [TestCase("abc")]
+    [TestCase("%")]
+    [TestCase("12%34")]
+    [TestCase("5%%")]
+    [TestCase("--5%")]
+    public void Number_ConvertBack_PercentFormat_Invalid_ThrowsConversionException(string text)
+    {
+        var conv = CreateNumberConverter<decimal>(() => CultureInfo.InvariantCulture, () => "P2");
+
+        Action act = () => conv.ConvertBack(text);
+
+        act.Should()
+            .Throw<ConversionException>()
+            .Which.ErrorMessageKey
+            .Should()
+            .Be(LanguageResource.Converter_InvalidNumber);
+    }
+
+    /// <summary>
+    /// An integral type accepts whole results but rejects a percentage that would need a fraction instead of truncating it (#11241).
+    /// </summary>
+    [Test]
+    public void Number_ConvertBack_PercentFormat_IntegralFraction_ThrowsConversionException()
+    {
+        var conv = CreateNumberConverter<int>(() => CultureInfo.InvariantCulture, () => "P2");
+
+        conv.ConvertBack(conv.Convert(3)).Should().Be(3);
+
+        Action act = () => conv.ConvertBack("150 %");
 
         act.Should()
             .Throw<ConversionException>()

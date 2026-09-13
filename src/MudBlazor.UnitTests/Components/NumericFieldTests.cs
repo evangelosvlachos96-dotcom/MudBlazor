@@ -1625,6 +1625,45 @@ namespace MudBlazor.UnitTests.Components
             comp.Find("input").GetAttribute("aria-invalid").Should().Be("true");
         }
 
+        /// <summary>
+        /// Verifies that a percent-formatted field parses edited text instead of reporting a conversion error (#11241).
+        /// </summary>
+        [TestCase("el-GR", "12,34%", "56,78%")]
+        [TestCase("tr-TR", "%12,34", "%56,78")]
+        public async Task NumericField_PercentFormat_ParsesEditedText(string cultureName, string initialText, string editedText)
+        {
+            var comp = Context.Render<MudNumericField<double>>(parameters => parameters
+                .Add(p => p.Value, 0.1234)
+                .Add(p => p.Format, "P2")
+                .Add(p => p.Culture, CultureInfo.GetCultureInfo(cultureName)));
+
+            comp.Instance.ReadText.Should().Be(initialText);
+
+            await comp.Find("input").ChangeAsync(editedText);
+            await comp.Find("input").BlurAsync();
+
+            await comp.WaitForAssertionAsync(() => comp.Instance.ReadValue.Should().Be(0.5678));
+            comp.Instance.ReadText.Should().Be(editedText);
+            comp.Instance.ConversionError.Should().BeFalse();
+        }
+
+        /// <summary>
+        /// Verifies that invalid text in a percent-formatted field still reports the conversion error (#11241).
+        /// </summary>
+        [Test]
+        public async Task NumericField_PercentFormat_InvalidText_ShowsConversionError()
+        {
+            var comp = Context.Render<MudNumericField<double>>(parameters => parameters
+                .Add(p => p.Format, "P2")
+                .Add(p => p.Culture, CultureInfo.InvariantCulture));
+
+            await comp.Find("input").ChangeAsync("abc");
+            await comp.Find("input").BlurAsync();
+
+            await comp.WaitForAssertionAsync(() => comp.Instance.ConversionError.Should().BeTrue());
+            comp.Instance.ConversionErrorMessage.Should().Be("Not a valid number");
+        }
+
         [TestCase(Adornment.Start)]
         [TestCase(Adornment.End)]
         public void Should_render_aria_label_for_adornment_if_provided(Adornment adornment)
